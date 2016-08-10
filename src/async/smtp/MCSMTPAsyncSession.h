@@ -58,15 +58,24 @@ namespace mailcore {
         virtual void setDispatchQueue(dispatch_queue_t dispatchQueue);
         virtual dispatch_queue_t dispatchQueue();
 #endif
-        
+
+        virtual void setOperationQueueCallback(OperationQueueCallback * callback);
+        virtual OperationQueueCallback * operationQueueCallback();
+        virtual bool isOperationQueueRunning();
+        virtual void cancelAllOperations();
+
         virtual SMTPOperation * loginOperation();
         virtual SMTPOperation * sendMessageOperation(Data * messageData);
         virtual SMTPOperation * sendMessageOperation(Address * from, Array * recipients,
                                                      Data * messageData);
+        virtual SMTPOperation * sendMessageOperation(Address * from, Array * recipients,
+                                                     String * filename);
         virtual SMTPOperation * checkAccountOperation(Address * from);
         
         virtual SMTPOperation * noopOperation();
         
+        virtual SMTPOperation * disconnectOperation();
+
     public: // private
         virtual void runOperation(SMTPOperation * operation);
         virtual SMTPSession * session();
@@ -80,6 +89,7 @@ namespace mailcore {
         ConnectionLogger * mConnectionLogger;
         pthread_mutex_t mConnectionLoggerLock;
         SMTPConnectionLogger * mInternalLogger;
+        OperationQueueCallback * mOperationQueueCallback;
         
         virtual void tryAutomaticDisconnectAfterDelay(void * context);
     };

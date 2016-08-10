@@ -20,6 +20,7 @@
 #include "MCMainThread.h"
 #include "MCLog.h"
 #include "MCHashMap.h"
+#include "MCLock.h"
 
 using namespace mailcore;
 
@@ -36,24 +37,28 @@ Object::~Object()
 
 void Object::init()
 {
+#if __APPLE__
+    mLock = OS_SPINLOCK_INIT;
+#else
     pthread_mutex_init(&mLock, NULL);
+#endif
     mCounter = 1;
 }
 
 int Object::retainCount()
 {
-    pthread_mutex_lock(&mLock);
+    MC_LOCK(&mLock);
     int value = mCounter;
-    pthread_mutex_unlock(&mLock);
+    MC_UNLOCK(&mLock);
     
     return value;
 }
 
 Object * Object::retain()
 {
-    pthread_mutex_lock(&mLock);
+    MC_LOCK(&mLock);
     mCounter ++;
-    pthread_mutex_unlock(&mLock);
+    MC_UNLOCK(&mLock);
     return this;
 }
 
@@ -61,7 +66,7 @@ void Object::release()
 {
     bool shouldRelease = false;
     
-    pthread_mutex_lock(&mLock);
+    MC_LOCK(&mLock);
     mCounter --;
     if (mCounter == 0) {
         shouldRelease = true;
@@ -70,8 +75,8 @@ void Object::release()
         MCLog("release too much %p %s", this, MCUTF8(className()));
         MCAssert(0);
     }
-    pthread_mutex_unlock(&mLock);
-    
+    MC_UNLOCK(&mLock);
+
     if (shouldRelease && !zombieEnabled) {
         //int status;
         //char * unmangled = abi::__cxa_demangle(typeid(* this).name(), NULL, NULL, &status);
@@ -165,7 +170,9 @@ static void removeFromPerformHash(Object * obj, Object::Method method, void * co
     struct mainThreadCallKeyData keyData;
     Object * queueIdentifier = NULL;
 #if __APPLE__
-    queueIdentifier = (String *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
+    if (targetDispatchQueue != NULL) {
+        queueIdentifier = (Object *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
+    }
 #endif
     memset(&keyData, 0, sizeof(keyData));
     keyData.dispatchQueueIdentifier = queueIdentifier;
@@ -174,7 +181,7 @@ static void removeFromPerformHash(Object * obj, Object::Method method, void * co
     keyData.method = method;
     key.data = &keyData;
     key.len = sizeof(keyData);
-    
+
     pthread_mutex_lock(&delayedPerformLock);
     chash_delete(delayedPerformHash, (chashdatum *) &key, NULL);
     pthread_mutex_unlock(&delayedPerformLock);
@@ -194,10 +201,15 @@ static void addToPerformHash(Object * obj, Object::Method method, void * context
     struct mainThreadCallKeyData keyData;
     Object * queueIdentifier = NULL;
 #if __APPLE__
-    queueIdentifier = (String *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
-    if (queueIdentifier == NULL) {
-        queueIdentifier = new Object();
-        dispatch_queue_set_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID", queueIdentifier, queueIdentifierDestructor);
+    if (targetDispatchQueue == NULL) {
+        queueIdentifier = NULL;
+    }
+    else {
+        queueIdentifier = (Object *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
+        if (queueIdentifier == NULL) {
+            queueIdentifier = new Object();
+            dispatch_queue_set_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID", queueIdentifier, queueIdentifierDestructor);
+        }
     }
 #endif
     memset(&keyData, 0, sizeof(keyData));
@@ -223,10 +235,11 @@ static void * getFromPerformHash(Object * obj, Object::Method method, void * con
     
     Object * queueIdentifier = NULL;
 #if __APPLE__
-    MCAssert(targetDispatchQueue != NULL);
-    queueIdentifier = (String *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
-    if (queueIdentifier == NULL)
-        return NULL;
+    if (targetDispatchQueue != NULL) {
+        queueIdentifier = (Object *) dispatch_queue_get_specific((dispatch_queue_t) targetDispatchQueue, "MCDispatchQueueID");
+        if (queueIdentifier == NULL)
+            return NULL;
+    }
 #endif
     memset(&keyData, 0, sizeof(keyData));
     keyData.dispatchQueueIdentifier = queueIdentifier;
@@ -302,9 +315,11 @@ void Object::performMethodOnMainThread(Method method, void * context, bool waitU
 void Object::performMethodOnDispatchQueue(Method method, void * context, void * targetDispatchQueue, bool waitUntilDone)
 {
     if (waitUntilDone) {
+        dispatch_retain((dispatch_queue_t) targetDispatchQueue);
         dispatch_sync((dispatch_queue_t) targetDispatchQueue, ^{
             (this->*method)(context);
         });
+        dispatch_release((dispatch_queue_t) targetDispatchQueue);
     }
     else {
         dispatch_async((dispatch_queue_t) targetDispatchQueue, ^{
@@ -345,7 +360,9 @@ void Object::performMethodOnDispatchQueueAfterDelay(Method method, void * contex
         }
         dupCancelableBlock(false);
         Block_release(dupCancelableBlock);
-        release();
+        if (!cancelled) {
+            release();
+        }
     });
 }
 
@@ -358,6 +375,7 @@ void Object::cancelDelayedPerformMethodOnDispatchQueue(Method method, void * con
     }
     removeFromPerformHash(this, method, context, targetDispatchQueue);
     dupCancelableBlock(true);
+    release();
 }
 #endif
 

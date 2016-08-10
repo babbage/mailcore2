@@ -18,27 +18,41 @@
 #import "MCOOperation+Private.h"
 #import "MCOAddress.h"
 #import "MCOSMTPOperation+Private.h"
+#include "MCOperationQueueCallback.h"
 
 using namespace mailcore;
 
 @interface MCOSMTPSession ()
 
 - (void) _logWithSender:(void *)sender connectionType:(MCOConnectionLogType)logType data:(NSData *)data;
+- (void) _queueRunningChanged;
 
 @end
 
-class MCOSMTPConnectionLoggerBridge : public Object, public ConnectionLogger {
+class MCOSMTPCallbackBridge : public Object, public ConnectionLogger, public OperationQueueCallback {
 public:
-    MCOSMTPConnectionLoggerBridge(MCOSMTPSession * session)
+    MCOSMTPCallbackBridge(MCOSMTPSession * session)
     {
         mSession = session;
     }
     
     virtual void log(void * sender, ConnectionLogType logType, Data * data)
     {
-        [mSession _logWithSender:sender connectionType:(MCOConnectionLogType)logType data:MCO_TO_OBJC(data)];
+        @autoreleasepool {
+            [mSession _logWithSender:sender connectionType:(MCOConnectionLogType)logType data:MCO_TO_OBJC(data)];
+        }
     }
-    
+
+    virtual void queueStartRunning()
+    {
+        [mSession _queueRunningChanged];
+    }
+
+    virtual void queueStoppedRunning()
+    {
+        [mSession _queueRunningChanged];
+    }
+
 private:
     MCOSMTPSession * mSession;
 };
@@ -46,7 +60,8 @@ private:
 @implementation MCOSMTPSession {
     mailcore::SMTPAsyncSession * _session;
     MCOConnectionLogger _connectionLogger;
-    MCOSMTPConnectionLoggerBridge * _loggerBridge;
+    MCOSMTPCallbackBridge * _callbackBridge;
+    MCOOperationQueueRunningChangeBlock _operationQueueRunningChangeBlock;
 }
 
 #define nativeType mailcore::SMTPAsyncSession
@@ -56,17 +71,17 @@ private:
     return _session;
 }
 
-- (id)init {
+- (instancetype) init {
     self = [super init];
     
     _session = new mailcore::SMTPAsyncSession();
-    _loggerBridge = new MCOSMTPConnectionLoggerBridge(self);
+    _callbackBridge = new MCOSMTPCallbackBridge(self);
     
     return self;
 }
 
 - (void)dealloc {
-    MC_SAFE_RELEASE(_loggerBridge);
+    MC_SAFE_RELEASE(_callbackBridge);
     [_connectionLogger release];
     _session->setConnectionLogger(NULL);
     _session->release();
@@ -91,7 +106,7 @@ MCO_OBJC_SYNTHESIZE_SCALAR(dispatch_queue_t, dispatch_queue_t, setDispatchQueue,
     _connectionLogger = [connectionLogger copy];
     
     if (_connectionLogger != nil) {
-        _session->setConnectionLogger(_loggerBridge);
+        _session->setConnectionLogger(_callbackBridge);
     }
     else {
         _session->setConnectionLogger(NULL);
@@ -101,6 +116,29 @@ MCO_OBJC_SYNTHESIZE_SCALAR(dispatch_queue_t, dispatch_queue_t, setDispatchQueue,
 - (MCOConnectionLogger) connectionLogger
 {
     return _connectionLogger;
+}
+
+- (void) setOperationQueueRunningChangeBlock:(MCOOperationQueueRunningChangeBlock)operationQueueRunningChangeBlock
+{
+    [_operationQueueRunningChangeBlock release];
+    _operationQueueRunningChangeBlock = [operationQueueRunningChangeBlock copy];
+
+    if (_operationQueueRunningChangeBlock != nil) {
+        _session->setOperationQueueCallback(_callbackBridge);
+    }
+    else {
+        _session->setOperationQueueCallback(NULL);
+    }
+}
+
+- (MCOOperationQueueRunningChangeBlock) operationQueueRunningChangeBlock
+{
+    return _operationQueueRunningChangeBlock;
+}
+
+- (void) cancelAllOperations
+{
+    MCO_NATIVE_INSTANCE->cancelAllOperations();
 }
 
 #pragma mark - Operations
@@ -134,6 +172,19 @@ MCO_OBJC_SYNTHESIZE_SCALAR(dispatch_queue_t, dispatch_queue_t, setDispatchQueue,
     return result;
 }
 
+- (MCOSMTPSendOperation *) sendOperationWithContentsOfFile:(NSString *)path
+                                                      from:(MCOAddress *)from
+                                                recipients:(NSArray *)recipients
+{
+    mailcore::SMTPOperation * coreOp =
+    MCO_NATIVE_INSTANCE->sendMessageOperation(MCO_FROM_OBJC(Address, from),
+                                              MCO_FROM_OBJC(Array, recipients),
+                                              MCO_FROM_OBJC(String, path));
+    MCOSMTPSendOperation * result = [[[MCOSMTPSendOperation alloc] initWithMCOperation:coreOp] autorelease];
+    [result setSession:self];
+    return result;
+}
+
 - (MCOSMTPOperation *) checkAccountOperationWithFrom:(MCOAddress *)from
 {
     mailcore::SMTPOperation *coreOp = MCO_NATIVE_INSTANCE->checkAccountOperation(MCO_FROM_OBJC(mailcore::Address, from));
@@ -153,6 +204,19 @@ MCO_OBJC_SYNTHESIZE_SCALAR(dispatch_queue_t, dispatch_queue_t, setDispatchQueue,
 - (void) _logWithSender:(void *)sender connectionType:(MCOConnectionLogType)logType data:(NSData *)data
 {
     _connectionLogger(sender, logType, data);
+}
+
+- (void) _queueRunningChanged
+{
+    if (_operationQueueRunningChangeBlock == NULL)
+        return;
+
+    _operationQueueRunningChangeBlock();
+}
+
+- (BOOL) isOperationQueueRunning
+{
+    return _session->isOperationQueueRunning();
 }
 
 @end

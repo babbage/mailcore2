@@ -16,6 +16,7 @@
 #include "MCNNTPFetchOverviewOperation.h"
 #include "MCNNTPCheckAccountOperation.h"
 #include "MCNNTPFetchServerTimeOperation.h"
+#include "MCNNTPPostOperation.h"
 #include "MCNNTPDisconnectOperation.h"
 #include "MCOperationQueueCallback.h"
 #include "MCConnectionLogger.h"
@@ -34,9 +35,15 @@ namespace mailcore {
         
         virtual void queueStartRunning() {
             mSession->retain();
+            if (mSession->operationQueueCallback() != NULL) {
+                mSession->operationQueueCallback()->queueStartRunning();
+            }
         }
         
         virtual void queueStoppedRunning() {
+            if (mSession->operationQueueCallback() != NULL) {
+                mSession->operationQueueCallback()->queueStoppedRunning();
+            }
             mSession->release();
         }
         
@@ -74,6 +81,7 @@ NNTPAsyncSession::NNTPAsyncSession()
     pthread_mutex_init(&mConnectionLoggerLock, NULL);
     mInternalLogger = new NNTPConnectionLogger(this);
     mSession->setConnectionLogger(mInternalLogger);
+    mOperationQueueCallback = NULL;
 }
 
 NNTPAsyncSession::~NNTPAsyncSession()
@@ -184,11 +192,10 @@ NNTPFetchArticleOperation * NNTPAsyncSession::fetchArticleOperation(String * gro
     return op;
 }
 
-NNTPFetchArticleOperation * NNTPAsyncSession::fetchArticleByMessageIDOperation(String *groupName, String *messageID)
+NNTPFetchArticleOperation * NNTPAsyncSession::fetchArticleByMessageIDOperation(String *messageID)
 {
     NNTPFetchArticleOperation * op = new NNTPFetchArticleOperation();
     op->setSession(this);
-    op->setGroupName(groupName);
     op->setMessageID(messageID);
     op->autorelease();
     return op;
@@ -230,6 +237,24 @@ NNTPListNewsgroupsOperation * NNTPAsyncSession::listDefaultNewsgroupsOperation()
     return op;
 }
 
+NNTPPostOperation * NNTPAsyncSession::postMessageOperation(Data * messageData)
+{
+    NNTPPostOperation * op = new NNTPPostOperation();
+    op->setSession(this);
+    op->setMessageData(messageData);
+    op->autorelease();
+    return op;
+}
+
+NNTPPostOperation * NNTPAsyncSession::postMessageOperation(String * filename)
+{
+    NNTPPostOperation * op = new NNTPPostOperation();
+    op->setSession(this);
+    op->setMessageFilepath(filename);
+    op->autorelease();
+    return op;
+}
+
 NNTPOperation * NNTPAsyncSession::disconnectOperation()
 {
     NNTPDisconnectOperation * op = new NNTPDisconnectOperation();
@@ -260,13 +285,13 @@ void NNTPAsyncSession::setConnectionLogger(ConnectionLogger * logger)
 {
     pthread_mutex_lock(&mConnectionLoggerLock);
     mConnectionLogger = logger;
-    if (mConnectionLogger != NULL) {
+    pthread_mutex_unlock(&mConnectionLoggerLock);
+    if (logger != NULL) {
         mSession->setConnectionLogger(mInternalLogger);
     }
     else {
         mSession->setConnectionLogger(NULL);
     }
-    pthread_mutex_unlock(&mConnectionLoggerLock);
 }
 
 ConnectionLogger * NNTPAsyncSession::connectionLogger()
@@ -300,3 +325,23 @@ dispatch_queue_t NNTPAsyncSession::dispatchQueue()
     return mQueue->dispatchQueue();
 }
 #endif
+
+void NNTPAsyncSession::setOperationQueueCallback(OperationQueueCallback * callback)
+{
+    mOperationQueueCallback = callback;
+}
+
+OperationQueueCallback * NNTPAsyncSession::operationQueueCallback()
+{
+    return mOperationQueueCallback;
+}
+
+bool NNTPAsyncSession::isOperationQueueRunning()
+{
+    return mQueue->count() > 0;
+}
+
+void NNTPAsyncSession::cancelAllOperations()
+{
+    mQueue->cancelAllOperations();
+}

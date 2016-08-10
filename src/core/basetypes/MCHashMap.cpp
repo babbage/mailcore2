@@ -31,7 +31,8 @@ namespace mailcore {
 void HashMap::init()
 {
     mCount = 0;
-    mCells = (void **) (HashMapCell **) calloc(CHASH_DEFAULTSIZE, sizeof(HashMapCell *));
+    size_t hashMapCellSize = sizeof(HashMapCell *);
+    mCells = (void **) calloc(CHASH_DEFAULTSIZE, hashMapCellSize);
     mAllocated = CHASH_DEFAULTSIZE;
 }
 
@@ -168,6 +169,10 @@ void HashMap::removeObjectForKey(Object * key)
 {
     unsigned int func, indx;
     HashMapIter * iter, * old;
+
+    if (key == NULL) {
+        return;
+    }
     
     func = key->hash();;
     indx = func % mAllocated;
@@ -198,6 +203,10 @@ Object * HashMap::objectForKey(Object * key)
 {
     unsigned int func;
     HashMapIter * iter;
+
+    if (key == NULL) {
+        return NULL;
+    }
     
     func = key->hash();
     
@@ -284,6 +293,9 @@ void HashMap::removeAllObjects()
 bool HashMap::isEqual(Object * otherObject)
 {
     HashMap * otherMap = (HashMap *) otherObject;
+    if (otherMap == NULL) {
+        return false;
+    }
     if (otherMap->count() != count()) {
         return false;
     }

@@ -16,6 +16,10 @@
 #include <execinfo.h>
 #endif
 
+#if defined(ANDROID) || defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 static pid_t sPid = -1;
 int MCLogEnabled = 0;
 
@@ -49,9 +53,7 @@ static void logInternalv(FILE * file,
         return;
     
     while (1) {
-        const char * p = filename;
-        
-        p = strchr(filename, '/');
+        const char * p = strchr(filename, '/');
         if (p == NULL) {
             break;
         }
@@ -61,7 +63,11 @@ static void logInternalv(FILE * file,
     struct timeval tv;
     struct tm tm_value;
     pthread_t thread_id = pthread_self();
-    
+
+#if defined(ANDROID) || defined(__ANDROID__)
+    __android_log_vprint(ANDROID_LOG_INFO, filename, format, argp);
+#else
+
     gettimeofday(&tv, NULL);
     time_t timevalue_sec = tv.tv_sec;
     localtime_r(&timevalue_sec, &tm_value);
@@ -72,7 +78,7 @@ static void logInternalv(FILE * file,
 #else
     if (0) {
 #endif
-        fprintf(file, "[%i:main] %s:%i: ", sPid, filename, line);
+        fprintf(file, "[%i:main] %s:%u: ", sPid, filename, line);
     }
     else {
         unsigned long threadValue;
@@ -83,7 +89,7 @@ static void logInternalv(FILE * file,
 #else
         threadValue = (unsigned long) thread_id;
 #endif
-        fprintf(file, "[%i:%lx] %s:%i: ", sPid, threadValue, filename, line);
+        fprintf(file, "[%i:%lx] %s:%u: ", sPid, threadValue, filename, line);
     }
     vfprintf(file, format, argp);
     fprintf(file, "\n");
@@ -103,5 +109,5 @@ static void logInternalv(FILE * file,
 #endif
         // TODO: other platforms implemented needed.
     }
-        
+#endif
 }

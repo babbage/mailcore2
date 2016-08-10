@@ -24,9 +24,15 @@ namespace mailcore {
         
         virtual void queueStartRunning() {
             mSession->retain();
+            if (mSession->operationQueueCallback() != NULL) {
+                mSession->operationQueueCallback()->queueStartRunning();
+            }
         }
         
         virtual void queueStoppedRunning() {
+            if (mSession->operationQueueCallback() != NULL) {
+                mSession->operationQueueCallback()->queueStoppedRunning();
+            }
             mSession->tryAutomaticDisconnect();
             mSession->release();
         }
@@ -65,6 +71,7 @@ SMTPAsyncSession::SMTPAsyncSession()
     pthread_mutex_init(&mConnectionLoggerLock, NULL);
     mInternalLogger = new SMTPConnectionLogger(this);
     mSession->setConnectionLogger(mInternalLogger);
+    mOperationQueueCallback = NULL;
 }
 
 SMTPAsyncSession::~SMTPAsyncSession()
@@ -233,6 +240,17 @@ SMTPOperation * SMTPAsyncSession::sendMessageOperation(Address * from, Array * r
     return (SMTPOperation *) op->autorelease();
 }
 
+SMTPOperation * SMTPAsyncSession::sendMessageOperation(Address * from, Array * recipients,
+                                                       String * filename)
+{
+    SMTPSendWithDataOperation * op = new SMTPSendWithDataOperation();
+    op->setSession(this);
+    op->setMessageFilepath(filename);
+    op->setFrom(from);
+    op->setRecipients(recipients);
+    return (SMTPOperation *) op->autorelease();
+}
+
 SMTPOperation * SMTPAsyncSession::checkAccountOperation(Address * from)
 {
     SMTPCheckAccountOperation * op = new SMTPCheckAccountOperation();
@@ -248,17 +266,24 @@ SMTPOperation * SMTPAsyncSession::noopOperation()
     return (SMTPOperation *) op->autorelease();
 }
 
+SMTPOperation * SMTPAsyncSession::disconnectOperation()
+{
+    SMTPDisconnectOperation * op = new SMTPDisconnectOperation();
+    op->setSession(this);
+    return (SMTPOperation *) op->autorelease();
+}
+
 void SMTPAsyncSession::setConnectionLogger(ConnectionLogger * logger)
 {
     pthread_mutex_lock(&mConnectionLoggerLock);
     mConnectionLogger = logger;
-    if (mConnectionLogger != NULL) {
+    pthread_mutex_unlock(&mConnectionLoggerLock);
+    if (logger != NULL) {
         mSession->setConnectionLogger(mInternalLogger);
     }
     else {
         mSession->setConnectionLogger(NULL);
     }
-    pthread_mutex_unlock(&mConnectionLoggerLock);
 }
 
 ConnectionLogger * SMTPAsyncSession::connectionLogger()
@@ -292,3 +317,23 @@ dispatch_queue_t SMTPAsyncSession::dispatchQueue()
     return mQueue->dispatchQueue();
 }
 #endif
+
+void SMTPAsyncSession::setOperationQueueCallback(OperationQueueCallback * callback)
+{
+    mOperationQueueCallback = callback;
+}
+
+OperationQueueCallback * SMTPAsyncSession::operationQueueCallback()
+{
+    return mOperationQueueCallback;
+}
+
+bool SMTPAsyncSession::isOperationQueueRunning()
+{
+    return mQueue->count() > 0;
+}
+
+void SMTPAsyncSession::cancelAllOperations()
+{
+    mQueue->cancelAllOperations();
+}
